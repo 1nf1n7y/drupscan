@@ -1,249 +1,249 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # encoding: UTF-8
 ################################################################################
-#
-#
 # Tasiopoulos Vasilis - tasiopoulos[DOT]vasilis[AT]gmail[DOT]com
-#
-################################################################################
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program. If not, see <http://www.gnu.org/licenses/>.
-#
+# Modernized for Python 3
 ################################################################################
 
-
-version = "1.0.0 [Beta]"
- 
-import urllib2
 import os
 import re
 import sys
+import urllib.request
 
-from updatevulnerabilitylist import updatevuln
-from drupcheck import checkifdrupal
-from drupupdate import drupupdate
+# استيراد الملفات الفرعية المرفقة في مشروع drupscan
+try:
+    from updatevulnerabilitylist import updatevuln
+    from drupcheck import checkifdrupal
+    from drupupdate import drupupdate
+except ImportError:
+    pass
 
-global drupalversion
-drupalversion=""
+version = "1.0.0 [Beta]"
+drupalversion = ""
+
 
 class color:
-  PURPLE = '\033[95m'
-  CYAN = '\033[96m'
-  BLUE = '\033[94m'
-  GREEN = '\033[92m'
-  YELLOW = '\033[93m'
-  RED = '\033[91m'
-  BOLD = '\033[1m'
-  UNDERL = '\033[4m'
-  RESET = '\033[0;0m'
-  
-  
-################################################################################
-#
-# Function to scan Multiple sites from txt
-#
-################################################################################
+    PURPLE = '\033[95m'
+    CYAN = '\033[96m'
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    UNDERL = '\033[4m'
+    RESET = '\033[0;0m'
+
 
 def scanmultiple():
-  #urlfile="/home/tibillys/Desktop/drupalsites.txt"
-  urlfile=raw_input("\nGive the path of the txt file: ")
-  try:
-    d = open(urlfile)
-    urlfilelines = d.readlines()
-  except:
-    print "\n[-] Error : '" + urlfile + "' not found" 
-    print "[-] Exiting Drupal Scan..\n"
-    exit()
-  for url in urlfilelines:
-    if "http://" in url:
-      url=url.replace("\n","")
-    else:
-      url="http://"+url.replace("\n","")
-      sys.stdout.write(color.BOLD +"\n [+] Checking for "+url+ " \n "+ color.RESET)
-    if checkifdrupal(url)==True:
-      checksinglesite(url)
-    else:
-      sys.stdout.write(color.RED +"\n [!] "+url+ " is not Drupal \n "+ color.RESET)
+    urlfile = input("\nGive the path of the txt file: ")
+    try:
+        with open(urlfile, 'r') as d:
+            urlfilelines = d.readlines()
+    except Exception as e:
+        print(f"\n[-] Error : '{urlfile}' not found ({e})")
+        print("[-] Exiting Drupal Scan..\n")
+        return
 
+    for url in urlfilelines:
+        url = url.strip()
+        if not url:
+            continue
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = "http://" + url
 
-################################################################################
-#
-# Function to check a single site
-#
-################################################################################
+        sys.stdout.write(color.BOLD + f"\n [+] Checking for {url} \n " + color.RESET)
+        if checkifdrupal(url):
+            checksinglesite(url)
+        else:
+            sys.stdout.write(color.RED + f"\n [!] {url} is not Drupal \n " + color.RESET)
 
 
 def checksinglesite(siteurl):
-  try:
-    url = siteurl + "/CHANGELOG.txt"
+    global drupalversion
+    drupalversion = ""
+    base_url = siteurl.rstrip('/')
 
-    for line in urllib2.urlopen(url):
-      if "Drupal" in line:
-	global drupalversion
-	if "," in line:
-	  drupalversion = line[line.index(" ")+1:line.index(",")]
-	elif "xx" in line: 
-	  drupalversion = line[line.index(" ")+1:line.index(" x")]
-	print "[+] Drupal version is "+drupalversion
-	break
-    matchvulnerability()
-  except:
-    print "[!] Cannot identify Drupals Version"
+    # 1. المحاولة الأولى: قراءة CHANGELOG.txt
+    try:
+        url = base_url + "/CHANGELOG.txt"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=8) as response:
+            lines = response.read().decode('utf-8', errors='ignore').splitlines()
+            for line in lines:
+                if "Drupal " in line:
+                    # استخراج رقم الإصدار عبر Regular Expression
+                    match = re.search(r'Drupal\s+([\d\.\-x]+)', line)
+                    if match:
+                        drupalversion = match.group(1).rstrip(',')
+                        break
+    except Exception:
+        pass
 
+    # 2. المحاولة الثانية (إذا فشلت الأولى): فحص الـ Meta Generator في الصفحة الرئيسية
+    if not drupalversion:
+        try:
+            req = urllib.request.Request(base_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=8) as response:
+                html = response.read().decode('utf-8', errors='ignore')
+                match = re.search(r'content="Drupal\s+([\d\.]+)', html, re.IGNORECASE)
+                if match:
+                    drupalversion = match.group(1)
+        except Exception:
+            pass
 
-
-
-################################################################################
-#
-# Function to make the maching of sites version--vulnerabilities
-#
-################################################################################
+    # طباعة النتيجة النهائية
+    if drupalversion:
+        print(f"[+] Drupal version is {drupalversion}")
+        matchvulnerability()
+    else:
+        print("[!] Cannot identify Drupal's Version (CHANGELOG.txt is hidden or protected)")
 
 
 def matchvulnerability():
-  global drupalversion
-  f = open("vulnerabilities/drupalvulnerabilitieslist.txt","r");
-  lines = f.readlines();
-  for line in lines:
-    if drupalversion in line:
-      sys.stdout.write(color.BOLD +"\n [.] "+  line[:line.index("Type:")] + color.RESET+"\n")
-      sys.stdout.write(color.RED +" [.] "+ line[line.index("Type:"):line.index("Descripion:")] +"\n "+ color.RESET)
-      sys.stdout.write("[.] "+ line[line.index("Url:"):line.index("Version:")] +"\n ")
-      sys.stdout.write(color.GREEN +"[.] "+ line[line.index("Descripion:"):line.index("Url:")] +"\n "+ color.RESET)
-      sys.stdout.flush()
+    global drupalversion
+    vfile = "vulnerabilities/drupalvulnerabilitieslist.txt"
+    if not os.path.exists(vfile):
+        print("[-] Vulnerabilities list file not found.")
+        return
 
+    if not drupalversion:
+        print("[!] No version specified to match vulnerabilities.")
+        return
 
+    print(f"\n[+] Matching vulnerabilities specifically for Drupal version: {drupalversion}")
+    
+    with open(vfile, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
 
+    matched = 0
+    for line in lines:
+        # 1. التأكد من وجود قسم Version داخل السطر
+        if "Version:" in line:
+            version_part = line[line.index("Version:"):].strip()
+            
+            # 2. البحث عن رقم الإصدار كمقطع مستقل داخل جزئية Version فقط
+            # يتجنب سنوات CVE ومطابقة الأرقام المتداخلة مثل 7.11 أو 6.11
+            pattern = r'(?<![\d\.])' + re.escape(drupalversion) + r'(?![\d\.])'
+            
+            if re.search(pattern, version_part):
+                matched += 1
+                try:
+                    sys.stdout.write(color.BOLD + "\n [.] " + line[:line.index("Type:")] + color.RESET + "\n")
+                    sys.stdout.write(color.RED + " [.] " + line[line.index("Type:"):line.index("Descripion:")] + "\n " + color.RESET)
+                    sys.stdout.write("[.] " + line[line.index("Url:"):line.index("Version:")] + "\n ")
+                    sys.stdout.write(color.GREEN + "[.] " + line[line.index("Descripion:"):line.index("Url:")] + "\n " + color.RESET)
+                    sys.stdout.flush()
+                except ValueError:
+                    print(f"[.] {line.strip()}")
 
-################################################################################
-#
-# Function to search in page for vulnerable module names
-#
-################################################################################
+    if matched == 0:
+        print(f"[+] No matching vulnerabilities found in local database for Drupal {drupalversion}.")
 
 
 def modulescanner(url):
-  modurl=urllib2.urlopen(url).read();
-  f = open("vulnerabilities/drupalmodulevulnerabilitieslist.txt","r");
-  line = f.readlines();
-  for modulename in line:
-    moduleonlyname=modulename[modulename.index("Vulnerable module:")+18:modulename.index("Type:")]
-    if "Module" in moduleonlyname:
-      moduleonlyname=moduleonlyname.replace("Module","")		#remove "Module" keyword from name
-    if "Drupal" in moduleonlyname:
-      moduleonlyname=moduleonlyname.replace("Drupal","") 		#remove "Drupal" keyword from name
-    moduleonlyname=moduleonlyname.replace(" ","") 			#remove spaces from name
-    moduleonlyname=moduleonlyname.lower() 				#make name lower case for matching
-    moduleonlyname=moduleonlyname.replace("\n","")			 #remove newlines from name
-    if moduleonlyname in modurl:
-      sys.stdout.write(color.BOLD +"\n [.] "+  modulename[:modulename.index(" Vulnerable module:")] + color.RESET+"\n")
-      sys.stdout.write(color.RED +"\n [.] "+  modulename[modulename.index("Vulnerable module:"):modulename.index("Type:")] + color.RESET+"\n")
-      sys.stdout.write(color.RED +" [.] "+ modulename[modulename.index("Type:"):modulename.index("Descripion:")] +"\n "+ color.RESET)
-      sys.stdout.write("[.] "+ modulename[modulename.index("Url:"):modulename.index("Version:")] +"\n ")
-      sys.stdout.write(color.GREEN +"[.] "+ modulename[modulename.index("Descripion:"):modulename.index("Url:")] +"\n "+ color.RESET)
-      sys.stdout.flush()
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as resp:
+            modurl = resp.read().decode('utf-8', errors='ignore')
 
+        vfile = "vulnerabilities/drupalmodulevulnerabilitieslist.txt"
+        if not os.path.exists(vfile):
+            print("[-] Module vulnerabilities list file not found.")
+            return
 
-################################################################################
-#
-# Function to search in page for modules using drupalxray.com
-#
-################################################################################
+        with open(vfile, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        for modulename in lines:
+            if "Vulnerable module:" in modulename and "Type:" in modulename:
+                moduleonlyname = modulename[modulename.index("Vulnerable module:") + 18:modulename.index("Type:")]
+                moduleonlyname = moduleonlyname.replace("Module", "").replace("Drupal", "").replace(" ", "").lower().strip()
+
+                if moduleonlyname in modurl.lower():
+                    print(color.BOLD + f"\n [.] Found module vulnerability: {moduleonlyname}" + color.RESET)
+                    print(f"[.] {modulename.strip()}")
+    except Exception as e:
+        print(f"[!] Error scanning modules: {e}")
 
 
 def modulescannerxray(url):
-  modulelist=[]
-  f = open("vulnerabilities/drupalmodulevulnerabilitieslist.txt","r");
-  line = f.readlines();
-  if "http://" in url:
-    url = url.replace("http://","")
-  if "www" not in url:
-    url = "www."+url
-  url="http://drupalxray.com/xray/"+url
-  xrayurl= urllib2.urlopen(url).readlines();
-  for line in xrayurl:
-    if "<a href=\"http://drupal.org/project/" in line:
-      module=line[line.index("target=\"_blank\">")+16:line.index("</a>")]
-      modulelist.append(module)
-  print "According to drupalxray.com "+ url+ "has tha above modules installed:\n"
-  for item in modulelist:
-    print item
+    modulelist = []
+    clean_url = url.replace("http://", "").replace("https://", "")
+    if not clean_url.startswith("www."):
+        clean_url = "www." + clean_url
 
-      
+    xray_url = "http://drupalxray.com/xray/" + clean_url
+    try:
+        req = urllib.request.Request(xray_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as resp:
+            lines = resp.read().decode('utf-8', errors='ignore').splitlines()
 
-print "[+] Version : "+ version
-print "[+] Copyright (C) 2013 - Drupal Scan Development Team. \n"
+        for line in lines:
+            if "<a href=\"http://drupal.org/project/" in line:
+                module = line[line.index("target=\"_blank\">") + 16:line.index("</a>")]
+                modulelist.append(module)
 
-while True:
-  print """
+        print(f"According to drupalxray.com, {url} has the above modules installed:\n")
+        for item in modulelist:
+            print(f" - {item}")
+    except Exception as e:
+        print(f"[!] Error connecting to drupalxray.com: {e}")
+
+
+def main():
+    print(f"[+] Version : {version}")
+    print("[+] Copyright (C) 2013 - Drupal Scan Development Team.\n")
+
+    while True:
+        print("""
   [+] Drupal Scan Toolkit Menu:
   [+] Press "S" to scan a single site.
   [+] Press "L" to scan from a list.
-  [+] Press "M" to scan drupals modules (Experimental).
+  [+] Press "M" to scan drupal's modules (Experimental).
   [+] Enter "V" to update Vulnerability database.
   [+] Enter "U" for update tool.
   [+] Enter "Q" for quit.
-  """
+  """)
 
-  option = raw_input("Enter Option: > ")
+        option = input("Enter Option: > ").strip()
 
-  if option =='S' or option =='s':
-    siteurl=raw_input("give me the site to check: ")
-    if "http://" not in siteurl:
-      siteurl = "http://" + siteurl
-    if checkifdrupal(siteurl)==True:
-      checksinglesite(siteurl)
-    else:
-      sys.stdout.write(color.RED +"\n [!] This site is not Drupal \n "+ color.RESET)
-  
-  if option =='L'or option =='l':
-    scanmultiple()
+        if option.lower() == 's':
+            siteurl = input("give me the site to check: ").strip()
+            if not siteurl.startswith("http://") and not siteurl.startswith("https://"):
+                siteurl = "http://" + siteurl
+            if checkifdrupal(siteurl):
+                checksinglesite(siteurl)
+            else:
+                sys.stdout.write(color.RED + "\n [!] This site is not Drupal \n " + color.RESET)
 
-  if option =='M'or option =='m':
-    print """
-    [+] Do you want to use drupalxray.com
-    """
+        elif option.lower() == 'l':
+            scanmultiple()
 
-    option = raw_input("Enter Option: > ")
-    if option =='y' or option =='Y':
-      siteurl=raw_input("give me the site to check: ")
-      if "http://" not in siteurl:
-	siteurl = "http://" + siteurl
-      if checkifdrupal(siteurl)==True:
-	modulescannerxray(siteurl)
-      else:
-	sys.stdout.write(color.RED +"\n [!] This site is not Drupal \n "+ color.RESET)
-    elif option =='n' or option =='N':
-      siteurl=raw_input("give me the site to check: ")
-      if "http://" not in siteurl:
-	siteurl = "http://" + siteurl
-      if checkifdrupal(siteurl)==True:
-	modulescanner(siteurl)
-      else:
-	sys.stdout.write(color.RED +"\n [!] This site is not Drupal \n "+ color.RESET)
-  
-  if option =='V'or option =='v':
-    updatevuln()
-  
-  if option =='U'or option =='u':
-    drupupdate()
+        elif option.lower() == 'm':
+            print("\n  [+] Do you want to use drupalxray.com (y/n)?")
+            sub_option = input("Enter Option: > ").strip().lower()
+            siteurl = input("give me the site to check: ").strip()
+            if not siteurl.startswith("http://") and not siteurl.startswith("https://"):
+                siteurl = "http://" + siteurl
 
-  if option =='Q' or option =='q':
-    print "[-] Exiting Drupal Scan\n"
-    exit()
+            if checkifdrupal(siteurl):
+                if sub_option == 'y':
+                    modulescannerxray(siteurl)
+                else:
+                    modulescanner(siteurl)
+            else:
+                sys.stdout.write(color.RED + "\n [!] This site is not Drupal \n " + color.RESET)
+
+        elif option.lower() == 'v':
+            updatevuln()
+
+        elif option.lower() == 'u':
+            drupupdate()
+
+        elif option.lower() == 'q':
+            print("[-] Exiting Drupal Scan\n")
+            sys.exit()
+
 
 if __name__ == '__main__':
-  main()
-    
-#eof
+    main()
