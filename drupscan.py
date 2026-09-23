@@ -2,36 +2,31 @@
 # encoding: UTF-8
 ################################################################################
 # Tasiopoulos Vasilis - tasiopoulos[DOT]vasilis[AT]gmail[DOT]com
-# Modernized for Python 3
+# Modernized for Python 3 & Maintained by 1nf1n7y
 ################################################################################
 
 import os
 import re
 import sys
+import ssl
 import urllib.request
 
-# استيراد الملفات الفرعية المرفقة في مشروع drupscan
-try:
-    from updatevulnerabilitylist import updatevuln
-    from drupcheck import checkifdrupal
-    from drupupdate import drupupdate
-except ImportError:
-    pass
+# استيراد الملفات الفرعية المرفقة
+from updatevulnerabilitylist import updatevuln
+from drupcheck import checkifdrupal
+from drupupdate import drupupdate
 
 version = "1.0.0 [Beta]"
 drupalversion = ""
 
 
-class color:
-    PURPLE = '\033[95m'
-    CYAN = '\033[96m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BOLD = '\033[1m'
-    UNDERL = '\033[4m'
-    RESET = '\033[0;0m'
+# تعريف ألوان وتنسيقات ANSI في أعلى الملف أو قبل الدالة
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+CYAN = "\033[96m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
 
 
 def scanmultiple():
@@ -63,81 +58,211 @@ def checksinglesite(siteurl):
     drupalversion = ""
     base_url = siteurl.rstrip('/')
 
-    # 1. المحاولة الأولى: قراءة CHANGELOG.txt
-    try:
-        url = base_url + "/CHANGELOG.txt"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=8) as response:
-            lines = response.read().decode('utf-8', errors='ignore').splitlines()
-            for line in lines:
-                if "Drupal " in line:
-                    # استخراج رقم الإصدار عبر Regular Expression
-                    match = re.search(r'Drupal\s+([\d\.\-x]+)', line)
-                    if match:
-                        drupalversion = match.group(1).rstrip(',')
-                        break
-    except Exception:
-        pass
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
-    # 2. المحاولة الثانية (إذا فشلت الأولى): فحص الـ Meta Generator في الصفحة الرئيسية
-    if not drupalversion:
+    # 1. Check CHANGELOG.txt and standard plain text documentation files
+    text_files = ["/CHANGELOG.txt", "/core/CHANGELOG.txt", "/MAINTAINERS.txt"]
+    for tf in text_files:
         try:
-            req = urllib.request.Request(base_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=8) as response:
-                html = response.read().decode('utf-8', errors='ignore')
-                match = re.search(r'content="Drupal\s+([\d\.]+)', html, re.IGNORECASE)
-                if match:
-                    drupalversion = match.group(1)
+            url = base_url + tf
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=6, context=ctx) as response:
+                if response.status == 200:
+                    lines = response.read().decode('utf-8', errors='ignore').splitlines()
+                    for line in lines:
+                        if "Drupal " in line:
+                            match = re.search(r'Drupal\s+([\d\.\-x]+)', line)
+                            if match:
+                                drupalversion = match.group(1).rstrip(',')
+                                break
+            if drupalversion:
+                break
         except Exception:
             pass
 
-    # طباعة النتيجة النهائية
-    if drupalversion:
-        print(f"[+] Drupal version is {drupalversion}")
-        matchvulnerability()
-    else:
-        print("[!] Cannot identify Drupal's Version (CHANGELOG.txt is hidden or protected)")
+    # 2. Check HTML meta generator tag AND asset query parameters (?v=X.X or ?X.X)
+    if not drupalversion:
+        try:
+            req = urllib.request.Request(base_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=8, context=ctx) as response:
+                html = response.read().decode('utf-8', errors='ignore')
+
+                # Meta generator tag
+                match = re.search(r'content=["\']Drupal\s+([\d\.]+)', html, re.IGNORECASE)
+                if match:
+                    drupalversion = match.group(1)
+
+                # Asset query strings (e.g., system.base.css?v=7.59 or drupal.js?7.59)
+                if not drupalversion:
+                    asset_match = re.search(r'(?:css|js)\?[^"\']*?\b(?:v=)?(7\.\d+|8\.\d+|9\.\d+|10\.\d+)', html, re.IGNORECASE)
+                    if asset_match:
+                        drupalversion = asset_match.group(1)
+
+                # Structural/global JS fallbacks if exact version is hidden
+                if not drupalversion:
+                    if "misc/drupal.js" in html or "Drupal.settings" in html or "sites/all/" in html or "sites/default/" in html:
+                        drupalversion = "7.x"
+                    elif "/core/" in html or "drupalSettings" in html:
+                        drupalversion = "8.x"
+        except Exception:
+            pass
+
+    # 3. Direct core file availability check
+    if not drupalversion:
+        core_files = ["/modules/system/system.css", "/misc/drupal.js", "/modules/node/node.css"]
+        for cf in core_files:
+            try:
+                url = base_url + cf
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=5, context=ctx) as response:
+                    if response.status == 200:
+                        drupalversion = "7.x"
+                        break
+            except Exception:
+                continue
+
+    # 4. Final fallback
+    if not drupalversion:
+        drupalversion = "7.x"
+        print("[!] Specific version hidden by target. Falling back to generic version: 7.x")
+
+    print(f"[+] Drupal version detected: {drupalversion}")
+    matchvulnerability()
+
+
+
+
+def parse_version_tuple(ver_str):
+    try:
+        parts = [int(p) for p in re.findall(r"\d+", ver_str)]
+        return tuple(parts)
+    except Exception:
+        return ()
+
+
+def is_version_vulnerable(target_str, description):
+    target = parse_version_tuple(target_str)
+    if not target or target[0] != 7:
+        return False
+
+    desc_lower = description.lower()
+
+    if "drupal 7" not in desc_lower and "7.x" not in desc_lower:
+        if re.search(r"drupal\s+(core\s+)?(8|9|10|11)", desc_lower):
+            return False
+
+    before_match = re.search(
+        r"(?:prior to|before)\s+7\.(\d+)", desc_lower, re.IGNORECASE
+    )
+    from_match = re.search(
+        r"(?:from|after)\s+7\.(\d+)", desc_lower, re.IGNORECASE
+    )
+
+    fixed_minor = int(before_match.group(1)) if before_match else None
+    start_minor = int(from_match.group(1)) if from_match else 0
+
+    target_minor = target[1] if len(target) > 1 else 0
+
+    if fixed_minor is not None:
+        if target_minor >= fixed_minor:
+            return False
+        if target_minor < start_minor:
+            return False
+        return True
+
+    earlier_match = re.search(
+        r"7\.(\d+)\s+and\s+earlier", desc_lower, re.IGNORECASE
+    )
+    if earlier_match:
+        affected_minor = int(earlier_match.group(1))
+        return target_minor <= affected_minor
+
+    if (
+        "drupal 7.x" in desc_lower
+        and "remote code execution" in desc_lower
+        and fixed_minor is None
+    ):
+        return True
+
+    return False
+
+
+def format_colored_line(line):
+    """تنسيق وتلوين حقول الثغرة"""
+    # تلوين عنوان الثغرة (CVE) بالأحمر العريض
+    line = re.sub(
+        r"(Title:\s*)(CVE-[\d-]+)",
+        rf"{CYAN}\1{RESET}{RED}{BOLD}\2{RESET}",
+        line,
+    )
+
+    # تلوين الرابط باللون الأزرق/السماوي
+    line = re.sub(
+        r"(Url:\s*)(https?://\S+)",
+        rf"{CYAN}\1{RESET}{CYAN}\2{RESET}",
+        line,
+    )
+
+    # تلوين حقل الوصف
+    line = re.sub(
+        r"(Descripion:)",
+        rf"{YELLOW}\1{RESET}",
+        line,
+    )
+
+    # تلوين حقل الإصدارات
+    line = re.sub(
+        r"(Version:\s*\[.*?\])",
+        rf"{GREEN}\1{RESET}",
+        line,
+    )
+
+    return line
 
 
 def matchvulnerability():
     global drupalversion
     vfile = "vulnerabilities/drupalvulnerabilitieslist.txt"
+
     if not os.path.exists(vfile):
-        print("[-] Vulnerabilities list file not found.")
+        print(f"{RED}[-] Vulnerabilities list file not found.{RESET}")
         return
 
     if not drupalversion:
-        print("[!] No version specified to match vulnerabilities.")
+        print(f"{YELLOW}[!] No version specified to match vulnerabilities.{RESET}")
         return
 
-    print(f"\n[+] Matching vulnerabilities specifically for Drupal version: {drupalversion}")
-    
+    print(
+        f"\n{BOLD}{CYAN}[+] Matching vulnerabilities specifically for Drupal version: {GREEN}{drupalversion}{RESET}\n"
+    )
+
     with open(vfile, "r", encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
     matched = 0
+
     for line in lines:
-        # 1. التأكد من وجود قسم Version داخل السطر
-        if "Version:" in line:
-            version_part = line[line.index("Version:"):].strip()
-            
-            # 2. البحث عن رقم الإصدار كمقطع مستقل داخل جزئية Version فقط
-            # يتجنب سنوات CVE ومطابقة الأرقام المتداخلة مثل 7.11 أو 6.11
-            pattern = r'(?<![\d\.])' + re.escape(drupalversion) + r'(?![\d\.])'
-            
-            if re.search(pattern, version_part):
-                matched += 1
-                try:
-                    sys.stdout.write(color.BOLD + "\n [.] " + line[:line.index("Type:")] + color.RESET + "\n")
-                    sys.stdout.write(color.RED + " [.] " + line[line.index("Type:"):line.index("Descripion:")] + "\n " + color.RESET)
-                    sys.stdout.write("[.] " + line[line.index("Url:"):line.index("Version:")] + "\n ")
-                    sys.stdout.write(color.GREEN + "[.] " + line[line.index("Descripion:"):line.index("Url:")] + "\n " + color.RESET)
-                    sys.stdout.flush()
-                except ValueError:
-                    print(f"[.] {line.strip()}")
+        if "Descripion:" not in line:
+            continue
+
+        description = line[line.index("Descripion:") :].strip()
+
+        if is_version_vulnerable(drupalversion, description):
+            matched += 1
+            colored_line = format_colored_line(line.strip())
+            sys.stdout.write(colored_line + "\n\n")
 
     if matched == 0:
-        print(f"[+] No matching vulnerabilities found in local database for Drupal {drupalversion}.")
+        print(
+            f"{GREEN}[+] No matching vulnerabilities found in local database for Drupal {drupalversion}.{RESET}"
+        )
+    else:
+        print(
+            f"{BOLD}{RED}[!] Total vulnerabilities found: {matched}{RESET}"
+        )
 
 
 def modulescanner(url):
